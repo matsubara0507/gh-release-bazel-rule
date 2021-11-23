@@ -2,6 +2,8 @@
 set -e
 
 tag_name=""
+target_branch=""
+archive_format="zip"
 flags=""
 
 while [ $# -gt 0 ]; do
@@ -27,7 +29,7 @@ EOS
     shift
     ;;
   --target)
-    flags="$flags -f target_commitish=$2"
+    target_branch=$2
     shift
     ;;
   * )
@@ -53,24 +55,25 @@ if ! type -p shasum >/dev/null; then
   exit 1
 fi
 
+if [ -z $target_branch ]; then
+  target_branch=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+fi
+
 repo_name=$(gh repo view --json name --jq .name)
 repo_name_with_owner=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-archive_name="${repo_name}-${tag_name}.zip"
 
 # https://docs.github.com/en/rest/reference/repos#create-a-release
-release_url=$(gh api -X POST repos/${repo_name_with_owner}/releases --jq '.html_url' -f tag_name=${tag_name}${flags})
+flags="${flags} -f tag_name=${tag_name} -f target_commitish=${target_branch}"
+release_url=$(gh api -X POST repos/${repo_name_with_owner}/releases --jq '.html_url'${flags})
 echo "Successfully created release: ${release_url}"
 
 mkdir -p .gh-release-bazel-rule
-cd .gh-release-bazel-rule
 
-wget -q "https://github.com/${repo_name_with_owner}/archive/refs/tags/${tag_name}.zip"
-mv ${tag_name}.zip ${archive_name}
-sha256=($(shasum -a 256 ${archive_name}))
+archive_name="${repo_name}-${tag_name}.${archive_format}"
+git archive -o .gh-release-bazel-rule/${archive_name} ${target_branch}
+sha256=($(shasum -a 256 .gh-release-bazel-rule/${archive_name}))
 
-gh release upload ${tag_name} ${archive_name}
-
-cd ..
+gh release upload ${tag_name} .gh-release-bazel-rule/${archive_name}
 
 rm -rfd .gh-release-bazel-rule
 
