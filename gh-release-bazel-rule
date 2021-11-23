@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -e
+
+tag_name=""
+flags=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+  -h|--help)
+    cat << EOS
+Create a new GitHub Release for a bazel rules repository
+
+USAGE
+  gh release-bazel-rule <tag> 
+
+FLAGS
+      --target branch                Target branch or full commit SHA (default: main branch)
+  -t, --title string                 Release title
+
+INHERITED FLAGS
+      --help                     Show help for command
+EOS
+    exit 0
+    ;;
+  -t|--title)
+    flags="$flags -f name=$2"
+    shift
+    ;;
+  --target)
+    flags="$flags -f target_commitish=$2"
+    shift
+    ;;
+  * )
+    if [ -z $tag_name ]; then
+      tag_name=$1
+    fi
+    ;;
+  esac
+  shift
+done
+
+if [ -z $tag_name ]; then
+  echo "Please input tag" >&2
+  exit 1
+fi
+
+if ! type -p wget >/dev/null; then
+  echo "wget not found on the system" >&2
+  exit 1
+fi
+if ! type -p shasum >/dev/null; then
+  echo "shasum not found on the system" >&2
+  exit 1
+fi
+
+repo_name=$(gh repo view --json name --jq .name)
+repo_name_with_owner=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+archive_name="${repo_name}-${tag_name}.zip"
+
+# https://docs.github.com/en/rest/reference/repos#create-a-release
+release_url=$(gh api -X POST repos/${repo_name_with_owner}/releases --jq '.html_url' -f tag_name=${tag_name}${flags})
+echo "Successfully created release: ${release_url}"
+
+mkdir -p .gh-release-bazel-rule
+cd .gh-release-bazel-rule
+
+wget -q "https://github.com/${repo_name_with_owner}/archive/refs/tags/${tag_name}.zip"
+mv ${tag_name}.zip ${archive_name}
+sha256=($(shasum -a 256 ${archive_name}))
+
+gh release upload ${tag_name} ${archive_name}
+
+cd ..
+
+rm -rfd .gh-release-bazel-rule
+
+echo "Generate WORKSPACE code:"
+cat << EOS
+http_archive(
+    name = "${repo_name}",
+    sha256 = "${sha256}",
+    urls = ["https://github.com/${repo_name_with_owner}/releases/download/${tag_name}/${archive_name}"],
+)
+EOS
